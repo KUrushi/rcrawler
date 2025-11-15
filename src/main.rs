@@ -1,6 +1,30 @@
 use scraper::{Html, Selector};
 use reqwest::Url;
 
+async fn fetch_links(url: &Url) -> Result<Vec<Url>, Box<dyn std::error::Error>> {
+
+    let body = reqwest::get(url.as_str()).await?.text().await?;
+    let document = Html::parse_document(&body);
+
+    let selector = Selector::parse("a").unwrap();
+
+    let mut links = Vec::new();
+
+    for element in document.select(&selector) {
+        if let Some(link) = element.value().attr("href") {
+            match url.join(link) {
+                Ok(link) => {
+                    links.push(link);
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                }
+            }
+        }
+    }
+    Ok(links)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. 対象のURL
@@ -8,30 +32,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Fetching: {}", url.as_str());
 
-    // 2. HTMLを取得
-    // reqwest::get でアクセスし、`.text().await`でHTMLの文字列を取得する
-    let body = reqwest::get(url.as_str()).await?.text().await?;
-
-    // 3. HTMLを解析可能な形式に変換 (Parse)
-    let document = Html::parse_document(&body);
-    // 4. 抽出したい要素を指定 (CSSセレクタ)
-    let selector = Selector::parse("a").unwrap();
-
-    for element in document.select(&selector) {
-        if let Some(link) = element.value().attr("href") {
-            // url.joinは引数が完全なURLの場合には引数のURLが返ってくる
-            match url.join(link) {
-                Ok(link) => {
-                    println!("Getting Link: {}", link.as_str());
-                }
-                Err(e) => {
-                    eprintln!("Failed to get link: {}", e);
-                }
-            }
-        } else {
-            println!("Link is not found");
-        }
-    }
+    let links = fetch_links(&url).await?;
+    println!("Found {} links on page: [{}]", links.len(), url.as_str());
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 use scraper::{Html, Selector};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashSet};
 use reqwest::Url;
 use tokio::sync::mpsc;
 

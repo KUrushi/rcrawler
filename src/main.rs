@@ -1,52 +1,89 @@
 use scraper::{Html, Selector};
 use std::collections::{HashSet, VecDeque};
 use reqwest::Url;
+use tokio::sync::mpsc;
 
-async fn fetch_links(url: &Url) -> Result<Vec<Url>, Box<dyn std::error::Error>> {
+struct CrawlResult {
+    url: Url,
+    links: Vec<Url>
+}
+
+async fn fetch_links(url: &Url) -> Result<Vec<Url>, Box<dyn std::error::Error + Send + Sync>> {
     let body = reqwest::get(url.as_str()).await?.text().await?;
     let document = Html::parse_document(&body);
-
     let selector = Selector::parse("a").unwrap();
 
     let mut links = Vec::new();
 
     for element in document.select(&selector) {
-        if let Some(link) = element.value().attr("href") {
-            match url.join(link) {
-                Ok(link) => {
-                    links.push(link);
-                }
-                Err(e) => {
-                    eprintln!("{}", e);
-                }
+        if let Some(href) = element.value().attr("href") {
+            if let Ok(full_url) = url.join(href) {
+                links.push(full_url);
             }
         }
     }
     Ok(links)
 }
 
+
+async fn crawl_worker(url: Url, tx: mpsc::Sender<CrawlResult>) {
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    match fetch_links(&url).await {
+        Ok(links) => {
+            let result = CrawlResult {url, links};
+            if let Err(_) = tx.send(result).await {
+                return;
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to fetch {}: {}", url, e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. 対象のURL
-    let url = Url::parse("https://www.rust-lang.org")?;
-    let mut fetch_target_urls: VecDeque<Url> = VecDeque::new();
+    let start_url = Url::parse("https://www.rust-lang.org")?;
     let mut known_urls = HashSet::<Url>::new();
-    fetch_target_urls.push_back(url.clone());
-    known_urls.insert(url);
+    known_urls.insert(start_url.clone());
 
+    // 1. チャネルを作成 (tx: 送信機、 rx: 受信機)
+    // バッファサイズは32
+    let (tx, mut rx) = mpsc::channel(32);
+    let mut active_tasks = 1_usize;
 
-    while let Some(url) = fetch_target_urls.pop_front() {
-        let _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        println!("Fetching: {}", url);
-        if let Ok(links) = fetch_links(&url).await {
-            for link in links {
-                if let (Some(src_host), Some(tgt_host)) = (url.host(), link.host()) {
-                    if src_host == tgt_host && known_urls.insert(link.clone()) {
-                        fetch_target_urls.push_back(link);
-                    }
+    // 2. 最初のタスクを起動
+    // txを複製して、workerに持たせる
+    let first_tx = tx.clone();
+
+    tokio::spawn(async move {
+        crawl_worker(start_url, first_tx).await;
+    });
+
+    println!("Starting crawling concurrently");
+
+    while let Some(result) = rx.recv().await {
+        active_tasks -= 1;
+        println!("Finished: {} (Found {} links)", result.url, result.links.len());
+        
+        for link in result.links {
+            if let (Some(src), Some(tgt)) = (result.url.host(), link.host()) {
+                if src == tgt && known_urls.insert(link.clone()) {
+                    active_tasks += 1;
+                    let tx_clone = tx.clone();
+                    tokio::spawn(async move {
+                        crawl_worker(link, tx_clone).await;
+                    });
                 }
             }
         }
+
+        if active_tasks == 0 {
+            break;
+        }
     }
+
     Ok(())
 }

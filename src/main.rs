@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::collections::HashSet;
 use reqwest::Url;
 use tokio::sync::mpsc;
@@ -13,13 +13,22 @@ struct CrawlResult {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(short, long)]
-    url: String,
-    #[arg(short, long, default_value_t=10)]
-    tasks: usize
+    #[command(subcommand)]
+    command: Commands,
 }
 
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Crawl {
+        #[arg(short, long)]
+        url: String,
+        #[arg(short, long, default_value_t=10)]
+        tasks: usize
+    },
 
+    List,
+    Get {key: String}
+}
 
 
 async fn fetch_links(url: &Url) -> Result<Vec<Url>, Box<dyn std::error::Error + Send + Sync>> {
